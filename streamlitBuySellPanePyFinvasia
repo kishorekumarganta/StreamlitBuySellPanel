@@ -1,0 +1,119 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+from NorenRestApiPy.NorenApi import  NorenApi
+import time
+
+# streamlit run e:/python_Projects/streamlit/buysSellPanel.py
+
+
+@st.cache
+def getSymbol():
+    symbolDf = pd.read_csv('https://shoonya.finvasia.com/NFO_symbols.txt.zip')
+    symbolDf = symbolDf[symbolDf.Symbol.isin(['NIFTY','BANKNIFTY'])]
+    #symbolDf = pd.read_csv('https://shoonya.finvasia.com/NSE_symbols.txt.zip')
+    
+    return symbolDf
+
+
+@st.experimental_singleton
+def login():
+    
+    class ShoonyaApiPy(NorenApi):
+        def __init__(self):
+            NorenApi.__init__(self, host='https://shoonyatrade.finvasia.com/NorenWClientTP/', websocket='wss://shoonyatrade.finvasia.com/NorenWSTP/', eodhost='https://shoonya.finvasia.com/chartApi/getdata/')
+
+        
+    #start of our program
+    SHOONYA_API = ShoonyaApiPy()
+
+    #credentials
+      
+    # user        = ''
+    # pwd         = ''
+    # factor2     = ''
+    # vc          = ''
+    # app_key     = ''
+    # imei        = ''
+ 
+    res=SHOONYA_API.login(userid=user, password=pwd, twoFA=factor2, vendor_code=vc, api_secret=app_key, imei=imei)
+    #print(datetime.now(), res)
+    return SHOONYA_API
+
+
+def truncate( f):
+        ticksize = 0.05*100
+        remainder = round(f,2)*100  % 100
+        pp = int((int(remainder/ticksize)*ticksize))
+        if len(str(pp))  == 1:
+            return float(str(int(f)) + '.0' + str(pp))
+        else:
+            return float(str(int(f)) + '.' + str(pp))
+
+def placeorder(shoonya, symbol, buySell,qty,orderType,exchange, price=0,trigger_price=0 ):
+        res= shoonya.place_order(buy_or_sell=buySell, product_type='I',
+                        exchange=exchange, tradingsymbol=symbol.strip(), 
+                        quantity=qty, discloseqty=0,price_type=orderType, price=truncate(price), trigger_price=truncate(trigger_price),
+                        retention='DAY')
+        print(f'Order Res {res} {symbol} {qty} {buySell} {orderType} LimitPrice {price} triggerPrice {trigger_price} ') 
+        return res
+    
+
+def load_datafromfile():
+    
+    SHOONYA_API = login()
+      
+    symbolDf = getSymbol()
+    with st.form(key='my_form', clear_on_submit =True):
+        symbol = st.selectbox('Symbol',symbolDf['TradingSymbol'].tolist())
+        symbolInfo = symbolDf[symbolDf['TradingSymbol'] == symbol].iloc[0]
+        qty = st.number_input(label='Quantity',min_value =1)
+        qty= symbolInfo['LotSize']*qty
+        exchnge = symbolInfo['Exchange']
+        price = st.number_input(label='Price',step =0.05)
+        tprice = st.number_input(label='Trigger Price',step =0.05)
+        orderType = st.radio("Order type",('MKT', 'LMT', 'SL-MKT','SL-LMT'),index =0 ,horizontal=True)
+        submit_buy = st.form_submit_button(label='Buy')
+        submit_sell = st.form_submit_button(label='Sell')
+
+   
+
+    if submit_buy:
+        res = placeorder(SHOONYA_API,symbol, 'B',qty,orderType,exchnge, price,tprice)
+        st.write(f'Buy Response : {symbol} {res}')
+    
+    if submit_sell:
+        res = placeorder(SHOONYA_API,symbol, 'S',qty,orderType,exchnge, price,tprice)
+        st.write(f'Sell Response: {symbol} {res}')
+     
+    orderdf = pd.DataFrame(SHOONYA_API.get_order_book())
+    compOrderdf = orderdf[orderdf.status=='COMPLETE']
+    openOrderdf = orderdf[orderdf.status.isin(['OPEN','TRIGGER_PENDING','CANCELED'])]
+    rejectedOrder = orderdf[orderdf.status=='REJECTED']
+    compOrderdf.reset_index(drop = True, inplace=True)
+    st.write(f'COMPLETED ORDER')
+    st.table(compOrderdf[['norenordno','tsym','qty','trantype','prctyp','status','fillshares','avgprc','exch_tm']]) 
+    if len(openOrderdf) > 0 :
+        openOrderdf.reset_index(drop = True, inplace=True)
+        st.write(f'PENDING/CANCEL ORDER')
+        st.table(openOrderdf[['norenordno','tsym','qty','trantype','prctyp','status','trgprc','prc']]) 
+    
+    if len(rejectedOrder) > 0 :
+        rejectedOrder.reset_index(drop = True, inplace=True)
+        st.write(f'REJECTED ORDER')
+        st.table(rejectedOrder[['norenordno','tsym','qty','trantype','prctyp','status','trgprc','prc','rejreason']]) 
+
+
+    posDf = pd.DataFrame(SHOONYA_API.get_positions())
+    if len(posDf) > 0:
+        st.write(f'POSITIONS BOOK ')
+        st.table(posDf[['exch','tsym','prd','netqty','netavgprc','rpnl','urmtom']]) 
+   
+  
+
+if __name__ == "__main__":
+    load_datafromfile()
+
+
+
+
